@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
 
+import Control.Monad
 import Network.HTTP.Client (newManager, defaultManagerSettings)
 import Network.HTTP.Types as HTTP
 import Servant.API
@@ -93,17 +94,18 @@ main = do
     Right decks ->
       if decks == [] then pure () else (error $ "Expected no decks, got: " <> show decks)
 
-  let someUser = User { userFirebaseId = someFirebaseId, userAnonymous = False }
+  let someUser = User { userFirebaseId = someFirebaseId, userUsername = Just (Username "joseph") }
 
   runClientM (usersPost' b someUser) clientEnv >>= \case
     Left err -> error $ "Expected user, got error: " <> show err
     Right (Item userId user) ->
-      if user == someUser && userId == someUserId then pure () else (error $ "Expected same user, got: " <> show user)
+      unless (user == someUser && userId == someUserId) $
+        error $ "Expected same user, got: " <> show user
 
   runClientM (usersPost' b someUser) clientEnv >>= \case
     Left (FailureResponse resp) ->
-      if HTTP.statusCode (responseStatusCode resp) == 409 then pure () else
-        error $ "Got unexpecte response: " <> show resp
+      unless (HTTP.statusCode (responseStatusCode resp) == 409) $
+        error $ "Got unexpected response: " <> show resp
     Left err -> error $ "Expected 409, got error: " <> show err
     Right item -> error $ "Expected failure, got success: " <> show item
 

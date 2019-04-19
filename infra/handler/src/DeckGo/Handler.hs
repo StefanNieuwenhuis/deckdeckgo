@@ -27,6 +27,7 @@ module DeckGo.Handler where
 
 import Control.Lens hiding ((.=))
 import Control.Monad
+import Control.Applicative
 import Data.Maybe
 import Control.Monad.Except
 import Data.Aeson ((.=), (.:), (.!=), (.:?))
@@ -95,7 +96,8 @@ newtype Username = Username { unUsername :: T.Text }
 
 data User = User
   { userFirebaseId :: FirebaseId
-  , userAnonymous :: Bool
+  -- , userAnonymous :: Bool
+  , userUsername :: Maybe Username
   } deriving (Show, Eq)
 
 newtype UserId = UserId { unUserId :: FirebaseId }
@@ -125,14 +127,23 @@ newtype FirebaseId = FirebaseId { unFirebaseId :: T.Text }
 instance FromJSONObject User where
   parseJSONObject = \obj ->
     User
-      -- potentially return "error exists" + user object
       <$> obj .: "firebase_uid"
-      <*> obj .: "anonymous"
+      <*> (
+        (do
+          True <- obj .: "anonymous"
+          (Nothing :: Maybe Username) <- obj .: "username"
+          pure Nothing
+        ) <|> (do
+          False <- obj .: "anonymous"
+          obj .: "username"
+        )
+        )
 
 instance ToJSONObject User where
   toJSONObject user = HMS.fromList
     [ "firebase_uid" .= userFirebaseId user
-    , "anonymous" .= userAnonymous user
+    , "anonymous" .= isNothing (userUsername user)
+    , "username" .= userUsername user
     ]
 
 instance Aeson.FromJSON User where
@@ -786,19 +797,29 @@ slidesDelete env fuid deckId slideId = do
 -- USERS
 
 userToItem :: UserId -> User -> HMS.HashMap T.Text DynamoDB.AttributeValue
-userToItem userId User{userAnonymous} =
-    HMS.singleton "UserFirebaseId" (userIdToAttributeValue userId) <>
-    HMS.singleton "UserAnonymous" (userAnonymousToAttributeValue userAnonymous)
+userToItem userId User{userUsername} =
+    (maybe
+      HMS.empty
+      (\username -> HMS.singleton "UserUsername" (userUsernameToAttributeValue username))
+      userUsername) <>
+    HMS.singleton "UserFirebaseId" (userIdToAttributeValue userId)
 
 userToItem' :: User -> HMS.HashMap T.Text DynamoDB.AttributeValue
-userToItem' User{userAnonymous} =
-    HMS.singleton ":a" (userAnonymousToAttributeValue userAnonymous)
+userToItem' User{userUsername} =
+    (maybe
+      HMS.empty
+      (\username -> HMS.singleton ":u" (userUsernameToAttributeValue username))
+      userUsername)
+    -- HMS.singleton ":a" (userAnonymousToAttributeValue userAnonymous)
 
 itemToUser :: HMS.HashMap T.Text DynamoDB.AttributeValue -> Maybe (Item UserId User)
 itemToUser item = do
     userId <- HMS.lookup "UserFirebaseId" item >>= userIdFromAttributeValue
     let userFirebaseId = unUserId userId
-    userAnonymous <- HMS.lookup "UserAnonymous" item >>= userAnonymousFromAttributeValue
+    userUsername <- case HMS.lookup "UserUsername" item of
+      Nothing -> Just Nothing
+      Just u -> Just <$> userUsernameFromAttributeValue u
+    -- userUsername <- HMS.lookup "UserUsername" item >>= userUsernameFromAttributeValue
     pure $ Item userId User{..}
 
 -- USER ATTRIBUTES
@@ -810,12 +831,12 @@ userIdToAttributeValue (UserId (FirebaseId userId)) =
 userIdFromAttributeValue :: DynamoDB.AttributeValue -> Maybe UserId
 userIdFromAttributeValue attr = (UserId . FirebaseId) <$> attr ^. DynamoDB.avS
 
-userNameToAttributeValue :: Username -> DynamoDB.AttributeValue
-userNameToAttributeValue (Username username) =
+userUsernameToAttributeValue :: Username -> DynamoDB.AttributeValue
+userUsernameToAttributeValue (Username username) =
     DynamoDB.attributeValue & DynamoDB.avS .~ Just username
 
-userNameFromAttributeValue :: DynamoDB.AttributeValue -> Maybe Username
-userNameFromAttributeValue attr = Username <$> attr ^. DynamoDB.avS
+userUsernameFromAttributeValue :: DynamoDB.AttributeValue -> Maybe Username
+userUsernameFromAttributeValue attr = Username <$> attr ^. DynamoDB.avS
 
 userFirebaseIdToAttributeValue :: FirebaseId -> DynamoDB.AttributeValue
 userFirebaseIdToAttributeValue (FirebaseId userId) =
